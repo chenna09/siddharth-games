@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>The Last Dot Standing - Retro Pixel Edition</title>
+  <style>
+    body {
+      margin: 0;
+      background: black;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      overflow: hidden;
+      font-family: "Courier New", monospace;
+    }
+
+    body::after {
+      content: "";
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      background: repeating-linear-gradient(
+        to bottom,
+        rgba(255,255,255,0.03) 0px,
+        rgba(255,255,255,0.03) 2px,
+        rgba(0,0,0,0.05) 2px,
+        rgba(0,0,0,0.05) 4px
+      );
+      z-index: 10;
+    }
+
+    canvas {
+      background: #000;
+      border: 4px solid #0ff;
+      box-shadow: 0 0 25px #0ff, 0 0 50px #0ff inset;
+    }
+
+    @font-face {
+      font-family: "PressStart";
+      src: url("https://fonts.gstatic.com/s/pressstart2p/v9/e3t4euO8T-267oIAQAu6jDQyK3nY.ttf");
+    }
+  </style>
+</head>
+<body>
+<canvas id="game" width="500" height="700"></canvas>
+
+<script>
+/* -------------------------
+   8-BIT SOUND ENGINE
+--------------------------*/
+function play8bit(type) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = "square";
+
+  if (type === "blip") {
+    osc.frequency.setValueAtTime(600, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(200, ctx.currentTime + 0.1);
+  }
+  if (type === "hit") {
+    osc.frequency.setValueAtTime(120, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(40, ctx.currentTime + 0.2);
+  }
+  if (type === "spawn") {
+    osc.frequency.setValueAtTime(300, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(500, ctx.currentTime + 0.05);
+  }
+  if (type === "power") {
+    osc.frequency.setValueAtTime(800, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(400, ctx.currentTime + 0.2);
+  }
+
+  gain.gain.setValueAtTime(0.2, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start();
+  osc.stop(ctx.currentTime + 0.25);
+}
+
+/* -------------------------
+   GAME VARIABLES
+--------------------------*/
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+ctx.imageSmoothingEnabled = false;
+
+let state = "menu";
+let paused = false;
+let player = { x: 250, y: 600, speed: 5 };
+let hazards = [];
+let powerups = [];
+let lastSpawn = 0;
+let spawnRate = 600;
+let speedMultiplier = 1.2;
+let score = 0;
+let bestScore = 0;
+let startTime = 0;
+
+let lastPowerup = 0;
+let powerupRate = 8000;
+
+let shieldActive = false;
+let slowmoActive = false;
+let slowmoEndTime = 0;
+let slowmoFactor = 1;
+
+/* -------------------------
+   STARFIELD BACKGROUND
+--------------------------*/
+const stars = [];
+for (let i = 0; i < 120; i++) {
+  stars.push({
+    x: Math.random() * canvas.width,
+    y: Math.random() * canvas.height,
+    speed: 0.5 + Math.random() * 1.5
+  });
+}
+
+function updateStars() {
+  for (let s of stars) {
+    s.y += s.speed;
+    if (s.y > canvas.height) {
+      s.y = 0;
+      s.x = Math.random() * canvas.width;
+    }
+  }
+}
+
+function drawStars() {
+  ctx.fillStyle = "#ffffff";
+  stars.forEach(s => ctx.fillRect(s.x, s.y, 2, 2));
+}
+
+/* -------------------------
+   UPDATED 48x48 SHIP
+   WIDE WINGS + LONG SPLIT FINS + REAR THRUSTERS
+--------------------------*/
+
+const ship = document.createElement("canvas");
+ship.width = 48;
+ship.height = 48;
+const sctx = ship.getContext("2d");
+sctx.clearRect(0, 0, 48, 48);
+
+// hull gradient
+let hullGrad = sctx.createLinearGradient(24, 4, 24, 44);
+hullGrad.addColorStop(0, "#d8dde4");
+hullGrad.addColorStop(0.4, "#5f6f85");
+hullGrad.addColorStop(1, "#3c4756");
+sctx.fillStyle = hullGrad;
+
+// main hull
+sctx.beginPath();
+sctx.moveTo(24, 2);
+sctx.lineTo(20, 14);
+sctx.lineTo(18, 22);
+sctx.lineTo(18, 36);
+sctx.lineTo(24, 44);
+sctx.lineTo(30, 36);
+sctx.lineTo(30, 22);
+sctx.lineTo(28, 14);
+sctx.closePath();
+sctx.fill();
+
+// underside shadow
+sctx.fillStyle = "rgba(10,12,16,0.55)";
+sctx.beginPath();
+sctx.moveTo(24, 12);
+sctx.lineTo(21, 22);
+sctx.lineTo(21, 36);
+sctx.lineTo(24, 42);
+sctx.lineTo(27, 36);
+sctx.lineTo(27, 22);
+sctx.closePath();
+sctx.fill();
+
+// nose highlight
+sctx.strokeStyle = "rgba(255,255,255,0.9)";
+sctx.lineWidth = 1;
+sctx.beginPath();
+sctx.moveTo(24, 3);
+sctx.lineTo(22, 12);
+sctx.lineTo(21, 16);
+sctx.stroke();
+
+/* WIDE WINGS */
+sctx.fillStyle = "#5f6f85";
+
+// left wing
+sctx.beginPath();
+sctx.moveTo(18, 22);
+sctx.lineTo(6, 28);
+sctx.lineTo(4, 34);
+sctx.lineTo(14, 38);
+sctx.lineTo(18, 34);
+sctx.closePath();
+sctx.fill();
+
+// right wing
+sctx.beginPath();
+sctx.moveTo(30, 22);
+sctx.lineTo(42, 28);
+sctx.lineTo(44, 34);
+sctx.lineTo(34, 38);
+sctx.lineTo(30, 34);
+sctx.closePath();
+sctx.fill();
+
+/* LONG SPLIT FINS */
+sctx.fillStyle = "#7b8ba0";
+
+// left fin
+sctx.beginPath();
+sctx.moveTo(6, 28);
+sctx.lineTo(2, 30);
+sctx.lineTo(5, 34);
+sctx.lineTo(8, 31);
+sctx.closePath();
+sctx.fill();
+
+// right fin
+sctx.beginPath();
+sctx.moveTo(42, 28);
+sctx.lineTo(46, 30);
+sctx.lineTo(43, 34);
+sctx.lineTo(40, 31);
+sctx.closePath();
+sctx.fill();
+
+/* COCKPIT */
+let cockpitGrad = sctx.createLinearGradient(20, 15, 28, 21);
+cockpitGrad.addColorStop(0, "#0a1a2e");
+cockpitGrad.addColorStop(1, "#10263c");
+sctx.fillStyle = cockpitGrad;
+
+sctx.beginPath();
+sctx.moveTo(20, 15);
+sctx.lineTo(28, 15);
+sctx.lineTo(27, 21);
+sctx.lineTo(21, 21);
+sctx.closePath();
+sctx.fill();
+
+// reflections
+sctx.fillStyle = "#6ffaff";
+sctx.fillRect(21, 16, 1, 1);
+sctx.fillRect(23, 17, 1, 1);
+
+// specular
+sctx.fillStyle = "#ffffff";
+sctx.fillRect(21, 15, 1, 1);
+
+/* REAR THRUSTERS */
+function drawEnginesBase() {
+  sctx.fillStyle = "#3c4756";
+  sctx.beginPath();
+  sctx.moveTo(18, 36);
+  sctx.lineTo(30, 36);
+  sctx.lineTo(32, 40);
+  sctx.lineTo(16, 40);
+  sctx.closePath();
+  sctx.fill();
+
+  // left thruster
+  let thrL = sctx.createRadialGradient(19, 42, 1, 19, 42, 6);
+  thrL.addColorStop(0, "#ffffff");
+  thrL.addColorStop(0.4, "#00f5ff");
+  thrL.addColorStop(1, "rgba(0,255,255,0)");
+  sctx.fillStyle = thrL;
+  sctx.beginPath();
+  sctx.arc(19, 42, 6, 0, Math.PI * 2);
+  sctx.fill();
+
+  // right thruster
+  let thrR = sctx.createRadialGradient(29, 42, 1, 29, 42, 6);
+  thrR.addColorStop(0, "#ffffff");
+  thrR.addColorStop(0.4, "#00f5ff");
+  thrR.addColorStop(1, "rgba(0,255,255,0)");
+  sctx.fillStyle = thrR;
+  sctx.beginPath();
+  sctx.arc(29, 42, 6, 0, Math.PI * 2);
+  sctx.fill();
+}
+drawEnginesBase();
+
+/* outline */
+sctx.strokeStyle = "rgba(0,0,0,0.7)";
+sctx.lineWidth = 1;
+sctx.beginPath();
+sctx.moveTo(24, 2);
+sctx.lineTo(20, 14);
+sctx.lineTo(18, 22);
+sctx.lineTo(18, 36);
+sctx.lineTo(24, 44);
+sctx.lineTo(30, 36);
+sctx.lineTo(30, 22);
+sctx.lineTo(28, 14);
+sctx.closePath();
+sctx.stroke();
+
+/* Thruster flicker */
+function drawThruster() {
+  const colors = ["#ffffff", "#e0ffff", "#c0ffff"];
+  const c = colors[Math.floor(Math.random() * colors.length)];
+
+  sctx.fillStyle = c;
+  sctx.fillRect(18, 42, 2, 3);
+  sctx.fillRect(28, 42, 2, 3);
+}
+
+/* Pixel-spark engine trail */
+function drawEngineTrail() {
+  for (let i = 0; i < 6; i++) {
+    const offsetX = (Math.random() - 0.5) * 18;
+    const offsetY = 10 + Math.random() * 20;
+    ctx.fillStyle = Math.random() > 0.5 ? "#00f0ff" : "#c0ffff";
+    ctx.fillRect(player.x - 1 + offsetX, player.y + offsetY, 2, 2);
+  }
+}
+
+/* -------------------------
+   SHIELD BUBBLE ANIMATION
+--------------------------*/
+
+let shieldPulse = 0;
+let shieldPulseDir = 1;
+
+function drawShieldBubble() {
+  if (!shieldActive) return;
+
+  shieldPulse += 0.08 * shieldPulseDir;
+  if (shieldPulse > 2) shieldPulseDir = -1;
+  if (shieldPulse < -2) shieldPulseDir = 1;
+
+  const radius = 34 + shieldPulse;
+
+  let grad = ctx.createRadialGradient(
+    player.x, player.y, radius * 0.4,
+    player.x, player.y, radius
+  );
+  grad.addColorStop(0, "rgba(0,255,255,0.25)");
+  grad.addColorStop(1, "rgba(0,255,255,0)");
+
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(player.x, player.y, radius, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = "rgba(0,255,255,0.8)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(player.x, player.y, radius * 0.75, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
+/* -------------------------
+   ASTEROIDS, POWERUPS, INPUT, GAME LOOP
+--------------------------*/
+
+function createAsteroid(size) {
+  const c = document.createElement("canvas");
+  c.width = size;
+  c.height = size;
+  const a = c.getContext("2d");
+
+  const points = 6 + Math.floor(Math.random() * 5);
+  const radius = size / 2;
+  const cx = radius;
+  const cy = radius;
+
+  a.fillStyle = "#aa7744";
+  a.strokeStyle = "#553322";
+  a.lineWidth = size * 0.08;
+
+  a.beginPath();
+  for (let i = 0; i < points; i++) {
+    const angle = (Math.PI * 2 * i) / points;
+    const wobble = radius * (0.7 + Math.random() * 0.3);
+    const x = cx + Math.cos(angle) * wobble;
+    const y = cy + Math.sin(angle) * wobble;
+    if (i === 0) a.moveTo(x, y);
+    else a.lineTo(x, y);
+  }
+  a.closePath();
+  a.fill();
+  a.stroke();
+
+  return c;
+}
+
+function createPowerupSprite(type) {
+  const size = 32;
+  const c = document.createElement("canvas");
+  c.width = size;
+  c.height = size;
+  const p = c.getContext("2d");
+
+  let color;
+  if (type === "shield") color = "#4ecbff";
+  else if (type === "slowmo") color = "#6dff6d";
+  else color = "#ffd84e";
+
+  const cx = size / 2;
+  const cy = size / 2;
+  const r = size / 2.4;
+
+  const grad = p.createRadialGradient(cx, cy, r * 0.2, cx, cy, r);
+  grad.addColorStop(0, color);
+  grad.addColorStop(1, "rgba(0,0,0,0)");
+  p.fillStyle = grad;
+  p.beginPath();
+  p.arc(cx, cy, r, 0, Math.PI * 2);
+  p.fill();
+
+  p.fillStyle = "#ffffff";
+  p.fillRect(cx - 3, cy - 3, 6, 6);
+
+  return c;
+}
+
+const keys = {};
+window.addEventListener("keydown", e => {
+  keys[e.key.toLowerCase()] = true;
+
+  if (e.key.toLowerCase() === "p" && state === "game") {
+    paused = !paused;
+  }
+
+  if (e.code === "Space") {
+    if (state === "menu" || state === "gameover") startGame();
+  }
+
+  if (e.key.toLowerCase() === "m" && state === "gameover") {
+    state = "menu";
+  }
+});
+
+window.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
+
+canvas.addEventListener("mousemove", e => {
+  if (state !== "game" || paused) return;
+  const rect = canvas.getBoundingClientRect();
+  player.x = e.clientX - rect.left;
+  player.y = e.clientY - rect.top;
+});
+
+function startGame() {
+  play8bit("blip");
+  state = "game";
+  paused = false;
+  hazards = [];
+  powerups = [];
+  score = 0;
+  speedMultiplier = 1.2;
+  spawnRate = 600;
+  startTime = performance.now();
+  lastSpawn = 0;
+  lastPowerup = 0;
+  shieldActive = false;
+  slowmoActive = false;
+  slowmoFactor = 1;
+  player.x = canvas.width / 2;
+  player.y = canvas.height - 100;
+}
+
+function spawnHazard() {
+  play8bit("spawn");
+
+  const size = 40 + Math.random() * 60;
+  const asteroidCanvas = createAsteroid(size);
+
+  hazards.push({
+    x: Math.random() * (canvas.width - size),
+    y: -size,
+    size: size,
+    speed: (4 + Math.random() * 6) * speedMultiplier,
+    sprite: asteroidCanvas
+  });
+}
+
+function spawnPowerup() {
+  const types = ["shield", "slowmo", "score"];
+  const type = types[Math.floor(Math.random() * types.length)];
+  const size = 32;
+  const sprite = createPowerupSprite(type);
+
+  powerups.push({
+    x: Math.random() * (canvas.width - size),
+    y: -size,
+    size: size,
+    speed: 2 + Math.random() * 2,
+    type: type,
+    sprite: sprite
+  });
+}
+
+function updatePlayer() {
+  if (keys["arrowleft"] || keys["a"]) player.x -= player.speed;
+  if (keys["arrowright"] || keys["d"]) player.x += player.speed;
+  if (keys["arrowup"] || keys["w"]) player.y -= player.speed;
+  if (keys["arrowdown"] || keys["s"]) player.y += player.speed;
+
+  player.x = Math.max(24, Math.min(canvas.width - 24, player.x));
+  player.y = Math.max(24, Math.min(canvas.height - 24, player.y));
+}
+
+function update() {
+  if (state !== "game" || paused) return;
+
+  updateStars();
+  updatePlayer();
+
+  const now = performance.now();
+  score = Math.floor((now - startTime) / 100);
+
+  if (slowmoActive && now > slowmoEndTime) {
+    slowmoActive = false;
+    slowmoFactor = 1;
+  }
+
+  if (score % 50 === 0 && score !== 0) {
+    speedMultiplier += 0.02;
+    spawnRate = Math.max(120, spawnRate - 4);
+  }
+
+  if (now - lastSpawn > spawnRate) {
+    spawnHazard();
+    lastSpawn = now;
+  }
+
+  if (now - lastPowerup > powerupRate) {
+    if (Math.random() < 0.6) spawnPowerup();
+    lastPowerup = now;
+  }
+
+  hazards.forEach(h => h.y += h.speed * slowmoFactor);
+  powerups.forEach(p => p.y += p.speed);
+
+  // collision with hazards
+  for (let h of hazards) {
+    const dx = h.x + h.size / 2 - player.x;
+    const dy = h.y + h.size / 2 - player.y;
+    if (Math.hypot(dx, dy) < 28 + h.size / 2) {
+      if (shieldActive) {
+        shieldActive = false;
+        hazards = hazards.filter(x => x !== h);
+        play8bit("power");
+        break;
+      } else {
+        play8bit("hit");
+        state = "gameover";
+        bestScore = Math.max(bestScore, score);
+        break;
+      }
+    }
+  }
+
+  // collision with powerups
+  for (let p of powerups) {
+    const dx = p.x + p.size / 2 - player.x;
+    const dy = p.y + p.size / 2 - player.y;
+    if (Math.hypot(dx, dy) < 28 + p.size / 2) {
+      play8bit("power");
+      if (p.type === "shield") {
+        shieldActive = true;
+      } else if (p.type === "slowmo") {
+        slowmoActive = true;
+        slowmoFactor = 0.4;
+        slowmoEndTime = now + 5000;
+      } else if (p.type === "score") {
+        score += 500;
+      }
+      powerups = powerups.filter(x => x !== p);
+      break;
+    }
+  }
+
+  hazards = hazards.filter(h => h.y < canvas.height + 120);
+  powerups = powerups.filter(p => p.y < canvas.height + 40);
+}
+
+/* -------------------------
+   DRAWING
+--------------------------*/
+
+function drawMenu() {
+  drawStars();
+
+  ctx.textAlign = "center";
+  ctx.font = "32px PressStart";
+  ctx.fillStyle = "#0ff";
+  ctx.shadowColor = "#0ff";
+  ctx.shadowBlur = 20;
+  ctx.fillText("THE LAST DOT", canvas.width / 2, 200);
+  ctx.fillText("STANDING", canvas.width / 2, 260);
+
+  ctx.shadowBlur = 0;
+
+  ctx.font = "18px PressStart";
+  ctx.fillStyle = "#ff00ff";
+  ctx.fillText("PRESS SPACE TO PLAY", canvas.width / 2, 330);
+
+  ctx.font = "16px PressStart";
+  ctx.fillStyle = "#ffff00";
+  ctx.fillText("CONTROL:", canvas.width / 2, 400);
+
+  ctx.font = "14px PressStart";
+  ctx.fillStyle = "#0f0";
+  ctx.fillText("WASD / ARROWS / MOUSE", canvas.width / 2, 440);
+
+  ctx.font = "12px PressStart";
+  ctx.fillStyle = "#0ff";
+  ctx.fillText("P = PAUSE", canvas.width / 2, 480);
+
+  if (bestScore > 0) {
+    ctx.fillStyle = "#ffea00";
+    ctx.fillText("BEST: " + bestScore, canvas.width / 2, 520);
+  }
+}
+
+function drawGame() {
+  drawStars();
+
+  // shield bubble behind ship
+  drawShieldBubble();
+
+  // engine trail
+  drawEngineTrail();
+
+  // thruster flicker
+  drawThruster();
+
+  // draw ship
+  ctx.drawImage(ship, player.x - 24, player.y - 24, 48, 48);
+
+  hazards.forEach(h => ctx.drawImage(h.sprite, h.x, h.y, h.size, h.size));
+  powerups.forEach(p => ctx.drawImage(p.sprite, p.x, p.y, p.size, p.size));
+
+  ctx.fillStyle = "#fff";
+  ctx.font = "16px PressStart";
+  ctx.textAlign = "left";
+  ctx.fillText("SCORE: " + score, 10, 30);
+  ctx.fillText("BEST: " + bestScore, 10, 60);
+
+  ctx.font = "12px PressStart";
+  let uiX = 10;
+  let uiY = 90;
+
+  if (shieldActive) {
+    ctx.fillStyle = "#4ecbff";
+    ctx.fillText("SHIELD", uiX, uiY);
+    uiY += 20;
+  }
+  if (slowmoActive) {
+    ctx.fillStyle = "#6dff6d";
+    ctx.fillText("SLOW-MO", uiX, uiY);
+    uiY += 20;
+  }
+
+  if (paused) {
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = "#ffff00";
+    ctx.font = "28px PressStart";
+    ctx.textAlign = "center";
+    ctx.fillText("PAUSED", canvas.width / 2, canvas.height / 2);
+  }
+}
+
+function drawGameOver() {
+  drawStars();
+
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#ff0040";
+  ctx.font = "32px PressStart";
+  ctx.fillText("GAME OVER", canvas.width / 2, 260);
+
+  ctx.font = "20px PressStart";
+  ctx.fillStyle = "#0ff";
+  ctx.fillText("SCORE: " + score, canvas.width / 2, 330);
+  ctx.fillText("BEST: " + bestScore, canvas.width / 2, 370);
+
+  ctx.fillStyle = "#ffff00";
+  ctx.fillText("SPACE = RETRY", canvas.width / 2, 450);
+  ctx.fillText("M = MENU", canvas.width / 2, 490);
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (state === "menu") drawMenu();
+  else if (state === "game") drawGame();
+  else if (state === "gameover") drawGameOver();
+}
+
+/* -------------------------
+   GAME LOOP
+--------------------------*/
+
+function loop() {
+  if (!paused) update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
